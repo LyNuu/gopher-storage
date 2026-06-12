@@ -1,6 +1,11 @@
 name: Auth Service CI
 
 on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'auth-service/**'
+
   pull_request:
     branches: [ "main" ]
     paths:
