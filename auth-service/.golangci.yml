@@ -1,0 +1,19 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - gci
+    - gofmt
+
+linters-settings:
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(auth-service)
+    custom-order: true

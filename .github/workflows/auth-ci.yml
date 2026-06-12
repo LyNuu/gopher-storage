@@ -1,0 +1,40 @@
+name: Auth Service CI
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'auth-service/**'
+
+jobs:
+  lint-and-test:
+    name: Tooling & Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache-dependency-path: auth-service/go.sum
+
+      - name: Go Mod Tidy
+        run: |
+          cd services/auth
+          go mod tidy
+          git diff --exit-code
+
+      - name: Run Golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.60
+          working-directory: services/auth
+          args: --timeout=5m
+
+      - name: Run Unit Tests
+        run: |
+          cd services/auth
+          go test -v -race -coverprofile=coverage.out ./...
