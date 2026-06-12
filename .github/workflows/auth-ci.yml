@@ -33,11 +33,10 @@ jobs:
           git diff --exit-code
 
       - name: Run Golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.60
-          working-directory: auth-service
-          args: --timeout=5m
+        run: |
+          cd auth-service
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.60.3
+          golangci-lint run --timeout=5m
 
       - name: Run Unit Tests
         run: |
