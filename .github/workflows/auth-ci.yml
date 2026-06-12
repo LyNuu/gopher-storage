@@ -28,7 +28,7 @@ jobs:
 
       - name: Go Mod Tidy
         run: |
-          cd services/auth
+          cd auth-service
           go mod tidy
           git diff --exit-code
 
@@ -36,10 +36,10 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.60
-          working-directory: services/auth
+          working-directory: auth-service
           args: --timeout=5m
 
       - name: Run Unit Tests
         run: |
-          cd services/auth
+          cd auth-service
           go test -v -race -coverprofile=coverage.out ./...
