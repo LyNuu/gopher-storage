@@ -1,0 +1,40 @@
+services:
+  auth-postgres:
+    image: postgres:16-alpine
+    container_name: auth-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: auth_db
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5431:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: auth_redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+
+  redis-ui:
+    image: redis/redisinsight:latest
+    container_name: auth_redis_ui
+    ports:
+      - "5540:5540"
+    volumes:
+      - redis_ui_data:/db
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+volumes:
+  pgdata:
+  redisdata:
+  redis_ui_data:
+
