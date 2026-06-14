@@ -1,15 +1,17 @@
 package service
 
 import (
-	"auth-service/internal/model"
-	"auth-service/internal/repository"
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
-	"time"
+
+	"auth-service/internal/model"
+	"auth-service/internal/repository"
 )
 
 type AuthService struct {
