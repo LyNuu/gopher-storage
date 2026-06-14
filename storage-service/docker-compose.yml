@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  cells-db:
+    image: postgres:16-alpine
+    container_name: cells-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cells
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+    volumes:
+      - cells_db_data:/var/lib/postgresql/data
+    networks:
+      - storage-network
+
+  pydio-cells:
+    image: pydio/cells:latest
+    container_name: pydio-cells
+    restart: unless-stopped
+    ports:
+      - "8070:8070"   # Веб-админка и основной REST API
+      - "33060:33060" # gRPC порт для Go SDK
+    environment:
+      - CELLS_BIND=0.0.0.0:8070
+      - CELLS_EXTERNAL=https://localhost:8070
+    volumes:
+      - cells_config:/var/cells
+    depends_on:
+      - cells-db
+    networks:
+      - storage-network
+
+  storage-db:
+    image: postgres:16-alpine
+    container_name: storage-db
+    environment:
+      POSTGRES_USER: storage_user
+      POSTGRES_PASSWORD: storage_password
+      POSTGRES_DB: storage_metadata
+    ports:
+      - "5433:5432" 
+    volumes:
+      - storage_db_data:/var/lib/postgresql/data
+
+volumes:
+  cells_db_data:
+  cells_config:
+  storage_db_data:
+
+networks:
+  storage-network:
+    driver: bridge
