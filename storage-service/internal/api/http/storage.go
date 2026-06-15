@@ -20,7 +20,7 @@ type StorageHandler struct {
 	storageService storageService
 }
 
-func (h *StorageHandler) NewStorageHandler(jwtSecret []byte, service storageService) *StorageHandler {
+func NewStorageHandler(jwtSecret []byte, service storageService) *StorageHandler {
 	return &StorageHandler{
 		jwtSecret:      jwtSecret,
 		storageService: service,
@@ -50,6 +50,11 @@ func (h *StorageHandler) CreateStorage(c *echo.Context) error {
 		"status": "success",
 	})
 
+}
+
+func (h *StorageHandler) RegisterRoute(c *echo.Echo) {
+	api := c.Group("/api/v1/storage")
+	api.POST("/create", h.CreateStorage)
 }
 
 type RequestValidator struct {

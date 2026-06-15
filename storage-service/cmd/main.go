@@ -46,7 +46,8 @@ func main() {
 	storageRepository := repository.NewStorageRepository(pool)
 	storageService := service.NewStorageService(storageRepository, pydioClient)
 
-	storageHandler := api.NewStorageHandler(os.Getenv("JWT_SECRET"), storageService)
+	storageHandler := api.NewStorageHandler([]byte(os.Getenv("JWT_SECRET")), storageService)
+	storageHandler.RegisterRoute(e)
 
 	srv := &http.Server{
 		Addr:    ":8082",
