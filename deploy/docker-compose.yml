@@ -41,7 +41,9 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
       API_KEY: ${PYDIO_API_KEY}
-      PYDIO_BASE_URL: https://pydio-cells:8070
+      # Обязан совпадать с CELLS_EXTERNAL (оба берут CELLS_PUBLIC_URL),
+      # иначе S3-загрузка падает с 403 SignatureDoesNotMatch.
+      PYDIO_BASE_URL: ${CELLS_PUBLIC_URL}
     depends_on:
       storage-postgres:
         condition: service_healthy
@@ -109,7 +111,7 @@ services:
       - "8070:8070"
     environment:
       - CELLS_BIND=0.0.0.0:8070
-      - CELLS_EXTERNAL=https://138.16.175.157.sslip.io:8070
+      - CELLS_EXTERNAL=${CELLS_PUBLIC_URL}
     volumes:
       - cells_data:/var/cells
     depends_on:
