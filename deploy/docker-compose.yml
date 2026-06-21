@@ -42,6 +42,7 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
       API_KEY: ${PYDIO_API_KEY}
       PYDIO_BASE_URL: ${CELLS_PUBLIC_URL}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
     depends_on:
       storage-postgres:
         condition: service_healthy
@@ -103,8 +104,6 @@ services:
   pydio-cells:
     image: pydio/cells:latest
     restart: unless-stopped
-    # Порт 8070 открыт для первичной настройки Cells (мастер, воркспейс, API-ключ).
-    # После настройки можно закрыть фаерволом.
     ports:
       - "8070:8070"
     environment:
