@@ -14,7 +14,7 @@ func InitPool(ctx context.Context) *pgxpool.Pool {
 	if err != nil {
 		log.Fatal(err)
 	}
-	config.MinConns = 20
+	config.MaxConns = 20
 	config.MinConns = 5
 	config.MaxConnLifetime = time.Hour
 

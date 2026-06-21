@@ -6,14 +6,17 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"time"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
-	"io"
-	"net/http"
-	"time"
 )
+
+const rootFolder = "personal-files"
 
 type PydioStorage struct {
 	s3Client    *s3.Client
@@ -31,11 +34,13 @@ func NewPydioStorage(baseURL, accessToken, gatewaySecret string) *PydioStorage {
 	}
 
 	s3Client := s3.New(s3.Options{
-		BaseEndpoint: aws.String(baseURL),
-		Region:       "us-east-1", // Cells регион не использует, но AWS SDK требует значение
-		UsePathStyle: true,
-		HTTPClient:   httpClient,
-		Credentials:  credentials.NewStaticCredentialsProvider(accessToken, gatewaySecret, ""),
+		BaseEndpoint:               aws.String(baseURL),
+		Region:                     "us-east-1",
+		UsePathStyle:               true,
+		HTTPClient:                 httpClient,
+		Credentials:                credentials.NewStaticCredentialsProvider(accessToken, gatewaySecret, ""),
+		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
+		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
 	})
 
 	return &PydioStorage{
@@ -47,11 +52,12 @@ func NewPydioStorage(baseURL, accessToken, gatewaySecret string) *PydioStorage {
 	}
 }
 
-// CreateUserFolder создаёт настоящую папку (узел типа COLLECTION) через Tree Service REST API.
-// Через S3 PutObject с пустым телом и "/" в конце ключа Pydio Cells не создаёт реальную папку
-// (в отличие от "чистого" S3/MinIO) - там нужен явный вызов Tree API.
-func (p *PydioStorage) CreateUserFolder(ctx context.Context, userID uuid.UUID) error {
-	folderPath := fmt.Sprintf("personal-files/%s", userID.String())
+func (p *PydioStorage) objectKey(storageID uuid.UUID, fileName string) string {
+	return fmt.Sprintf("%s/%s/%s", rootFolder, storageID.String(), fileName)
+}
+
+func (p *PydioStorage) CreateStorageFolder(ctx context.Context, storageID uuid.UUID) error {
+	folderPath := fmt.Sprintf("%s/%s", rootFolder, storageID.String())
 
 	body, err := json.Marshal(map[string]interface{}{
 		"Nodes": []map[string]string{
@@ -81,18 +87,15 @@ func (p *PydioStorage) CreateUserFolder(ctx context.Context, userID uuid.UUID) e
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("failed to create folder in pydio: unexpected status %d", resp.StatusCode)
 	}
-
 	return nil
 }
 
-func (p *PydioStorage) UploadUserFile(ctx context.Context, userID uuid.UUID, fileName string, fileStream io.Reader, fileSize int64, contentType string) error {
-	targetKey := fmt.Sprintf("personal-files/%s/%s", userID.String(), fileName)
-
+func (p *PydioStorage) UploadFile(ctx context.Context, storageID uuid.UUID, fileName string, body io.Reader, size int64, contentType string) error {
 	_, err := p.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(p.bucket),
-		Key:           aws.String(targetKey),
-		Body:          fileStream,
-		ContentLength: aws.Int64(fileSize),
+		Key:           aws.String(p.objectKey(storageID, fileName)),
+		Body:          body,
+		ContentLength: aws.Int64(size),
 		ContentType:   aws.String(contentType),
 	})
 	if err != nil {
@@ -101,78 +104,37 @@ func (p *PydioStorage) UploadUserFile(ctx context.Context, userID uuid.UUID, fil
 	return nil
 }
 
-func (p *PydioStorage) DownloadUserFile(ctx context.Context, userID uuid.UUID, fileName string) (io.ReadCloser, int64, string, error) {
-	targetKey := fmt.Sprintf("personal-files/%s/%s", userID.String(), fileName)
-
+func (p *PydioStorage) DownloadFile(ctx context.Context, storageID uuid.UUID, fileName string) (io.ReadCloser, int64, string, error) {
 	output, err := p.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(p.bucket),
-		Key:    aws.String(targetKey),
+		Key:    aws.String(p.objectKey(storageID, fileName)),
 	})
 	if err != nil {
 		return nil, 0, "", err
 	}
-
-	// Возвращаем поток, размер и тип контента
-	return output.Body, *output.ContentLength, *output.ContentType, nil
+	return output.Body, aws.ToInt64(output.ContentLength), aws.ToString(output.ContentType), nil
 }
 
-func (p *PydioStorage) DeleteUserFile(ctx context.Context, userID uuid.UUID, fileName string) error {
-	targetKey := fmt.Sprintf("personal-files/%s/%s", userID.String(), fileName)
-
+func (p *PydioStorage) DeleteFile(ctx context.Context, storageID uuid.UUID, fileName string) error {
 	_, err := p.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(p.bucket),
-		Key:    aws.String(targetKey),
+		Key:    aws.String(p.objectKey(storageID, fileName)),
 	})
-
 	if err != nil {
-		return fmt.Errorf("failed to delete file from S3: %w", err)
+		return fmt.Errorf("failed to delete file from s3: %w", err)
 	}
 	return nil
 }
 
-func (p *PydioStorage) GetShareableLink(ctx context.Context, userID uuid.UUID, fileName string, duration time.Duration) (string, error) {
-	targetKey := fmt.Sprintf("personal-files/%s/%s", userID.String(), fileName)
-
-	presignClient := s3.NewPresignClient(p.s3Client)
-
-	request, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(p.bucket),
-		Key:    aws.String(targetKey),
-	}, s3.WithPresignExpires(duration))
-
-	if err != nil {
-		return "", fmt.Errorf("failed to presign url: %w", err)
-	}
-
-	return request.URL, nil
-}
-
-func (p *PydioStorage) CreateUploadLink(
-	ctx context.Context,
-	userID uuid.UUID,
-	fileName string,
-	expires time.Duration,
-) (string, error) {
-
-	key := fmt.Sprintf(
-		"personal-files/%s/%s",
-		userID.String(),
-		fileName,
-	)
-
+func (p *PydioStorage) CreateUploadLink(ctx context.Context, storageID uuid.UUID, fileName string, expires time.Duration) (string, error) {
 	presigner := s3.NewPresignClient(p.s3Client)
 
-	req, err := presigner.PresignPutObject(
-		ctx,
-		&s3.PutObjectInput{
-			Bucket: aws.String(p.bucket),
-			Key:    aws.String(key),
-		},
-		s3.WithPresignExpires(expires),
-	)
+	req, err := presigner.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(p.bucket),
+		Key:    aws.String(p.objectKey(storageID, fileName)),
+	}, s3.WithPresignExpires(expires))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to presign upload url: %w", err)
 	}
-
 	return req.URL, nil
 }

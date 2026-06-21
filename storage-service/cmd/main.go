@@ -2,15 +2,10 @@ package main
 
 import (
 	"context"
-	echojwt "github.com/labstack/echo-jwt/v5"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"storage-service/internal/connections"
-	"storage-service/internal/repository"
-	"storage-service/internal/s3/pydio"
-	"storage-service/internal/service"
 	"syscall"
 	"time"
 
@@ -20,37 +15,43 @@ import (
 	"github.com/labstack/echo/v5/middleware"
 
 	api "storage-service/internal/api/http"
+	"storage-service/internal/connections"
+	"storage-service/internal/repository"
+	"storage-service/internal/s3/pydio"
+	"storage-service/internal/service"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	err := godotenv.Load()
-	if err != nil {
+	if err := godotenv.Load(); err != nil {
 		slog.Info("Error loading .env file")
 	}
 
 	e := echo.New()
 	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
-	e.Use(echojwt.WithConfig(echojwt.Config{
-		SigningKey: []byte(os.Getenv("JWT_SECRET")),
-	}))
 	e.Validator = &api.RequestValidator{Validator: validator.New()}
 	e.HTTPErrorHandler = api.CustomHTTPErrorHandler
+
 	pool := connections.InitPool(ctx)
 	defer pool.Close()
 
 	pydioClient := pydio.NewPydioStorage(
 		os.Getenv("PYDIO_BASE_URL"),
 		os.Getenv("API_KEY"),
-		"gatewaysecret", // фиксированная константа протокола Pydio S3-gateway, не секрет в смысле безопасности
+		"gatewaysecret",
 	)
 	storageRepository := repository.NewStorageRepository(pool)
 	storageService := service.NewStorageService(storageRepository, pydioClient)
 
-	storageHandler := api.NewStorageHandler([]byte(os.Getenv("JWT_SECRET")), storageService)
+	publicBaseURL := os.Getenv("PUBLIC_BASE_URL")
+	if publicBaseURL == "" {
+		publicBaseURL = "http://localhost:8082"
+	}
+
+	storageHandler := api.NewStorageHandler([]byte(os.Getenv("JWT_SECRET")), publicBaseURL, storageService)
 	storageHandler.RegisterRoute(e)
 
 	srv := &http.Server{

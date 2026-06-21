@@ -3,76 +3,99 @@ package http
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"time"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	echojwt "github.com/labstack/echo-jwt/v5"
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
-	"net/http"
-	"time"
+
+	"storage-service/internal/model"
+	"storage-service/internal/service"
 )
 
 var (
-	ErrUnauthorized  = errors.New("unauthorized")
-	ErrBadRequest    = errors.New("invalid access token")
-	ErrBadRequestEOF = errors.New("unexpected EOF")
+	ErrUnauthorized = errors.New("unauthorized")
+	ErrBadRequest   = errors.New("bad request")
 )
 
 type StorageHandler struct {
 	jwtSecret      []byte
+	publicBaseURL  string
 	storageService storageService
 }
 
-func NewStorageHandler(jwtSecret []byte, service storageService) *StorageHandler {
+func NewStorageHandler(jwtSecret []byte, publicBaseURL string, svc storageService) *StorageHandler {
 	return &StorageHandler{
 		jwtSecret:      jwtSecret,
-		storageService: service,
+		publicBaseURL:  publicBaseURL,
+		storageService: svc,
 	}
+}
+
+type grantAccessRequest struct {
+	UserID string            `json:"user_id" validate:"required,uuid"`
+	Level  model.AccessLevel `json:"level" validate:"required,oneof=read write"`
+}
+
+type shareRequest struct {
+	TTLSeconds int64 `json:"ttl_seconds"`
 }
 
 func (h *StorageHandler) CreateStorage(c *echo.Context) error {
-	token, err := echo.ContextGet[*jwt.Token](c, "user")
-	if err != nil {
-		return ErrUnauthorized
-	}
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return ErrUnauthorized
-	}
-	userIDStr, ok := claims["user_id"].(string)
-	if !ok {
-		return ErrBadRequest
-	}
-	userUUID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		return ErrBadRequest
-	}
+	userID := userIDFromCtx(c)
 
-	err = h.storageService.CreateStorage(c.Request().Context(), userUUID)
-	if err != nil {
+	var in model.CreateStorageInput
+	if err := c.Bind(&in); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+	if err := c.Validate(&in); err != nil {
 		return err
 	}
 
-	return c.JSON(http.StatusCreated, map[string]any{
-		"status": "success",
-	})
+	st, err := h.storageService.CreateStorage(c.Request().Context(), userID, in)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusCreated, st)
+}
 
+func (h *StorageHandler) ListStorages(c *echo.Context) error {
+	userID := userIDFromCtx(c)
+
+	list, err := h.storageService.ListStorages(c.Request().Context(), userID)
+	if err != nil {
+		return err
+	}
+	if list == nil {
+		list = []model.Storage{}
+	}
+	return c.JSON(http.StatusOK, list)
+}
+
+func (h *StorageHandler) GetStorage(c *echo.Context) error {
+	userID := userIDFromCtx(c)
+
+	storageID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return ErrBadRequest
+	}
+
+	st, err := h.storageService.GetStorage(c.Request().Context(), userID, storageID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, st)
 }
 
 func (h *StorageHandler) UploadFile(c *echo.Context) error {
-	token, err := echo.ContextGet[*jwt.Token](c, "user")
-	if err != nil {
-		return ErrUnauthorized
-	}
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return ErrUnauthorized
-	}
-	userIDStr, ok := claims["user_id"].(string)
-	if !ok {
-		return ErrBadRequest
-	}
-	userUUID, err := uuid.Parse(userIDStr)
+	userID := userIDFromCtx(c)
+
+	storageID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		return ErrBadRequest
 	}
@@ -81,190 +104,272 @@ func (h *StorageHandler) UploadFile(c *echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "failed to parse multipart form: "+err.Error())
 	}
-
-	formFiles := form.File["file"]
-	if len(formFiles) == 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "failed to get file from request, check 'file' key")
+	files := form.File["file"]
+	if len(files) == 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "file is required, use 'file' key")
 	}
-	fileHeader := formFiles[0]
+	header := files[0]
 
-	file, err := fileHeader.Open()
+	src, err := header.Open()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to open file")
 	}
-	defer file.Close()
+	defer src.Close()
 
-	fileName := fileHeader.Filename
-	fileSize := fileHeader.Size
-	contentType := fileHeader.Header.Get("Content-Type")
-
-	err = h.storageService.UploadUserFile(c.Request().Context(), userUUID, fileName, file, fileSize, contentType)
+	f, err := h.storageService.UploadFile(
+		c.Request().Context(), userID, storageID, header.Filename, src, header.Size, header.Header.Get("Content-Type"),
+	)
 	if err != nil {
 		return err
 	}
-
-	return c.JSON(http.StatusOK, map[string]any{
-		"status":    "success",
-		"file_name": fileName,
-	})
+	return c.JSON(http.StatusCreated, f)
 }
 
 func (h *StorageHandler) DownloadFile(c *echo.Context) error {
-	token, err := echo.ContextGet[*jwt.Token](c, "user")
-	if err != nil {
-		return ErrUnauthorized
-	}
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return ErrUnauthorized
-	}
-	userIDStr, ok := claims["user_id"].(string)
-	if !ok {
-		return ErrBadRequest
-	}
-	userUUID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		return ErrBadRequest
-	}
-	fileName := c.QueryParam("filename")
+	userID := userIDFromCtx(c)
 
-	// 1. Получаем поток из Pydio
-	stream, size, contentType, err := h.storageService.DownloadUserFile(c.Request().Context(), userUUID, fileName)
+	storageID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "File not found")
+		return ErrBadRequest
+	}
+	name := c.Param("name")
+
+	stream, size, contentType, err := h.storageService.DownloadFile(c.Request().Context(), userID, storageID, name)
+	if err != nil {
+		return err
 	}
 	defer stream.Close()
+	return h.streamFile(c, stream, size, contentType, name)
+}
 
-	// 2. Устанавливаем заголовки для скачивания
-	c.Response().Header().Set(echo.HeaderContentType, contentType)
-	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
-	c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", size))
+func (h *StorageHandler) ListFiles(c *echo.Context) error {
+	userID := userIDFromCtx(c)
 
-	// 3. Отправляем поток клиенту
-	return c.Stream(http.StatusOK, contentType, stream)
+	storageID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return ErrBadRequest
+	}
+
+	files, err := h.storageService.ListFiles(c.Request().Context(), userID, storageID)
+	if err != nil {
+		return err
+	}
+	if files == nil {
+		files = []model.File{}
+	}
+	return c.JSON(http.StatusOK, files)
 }
 
 func (h *StorageHandler) DeleteFile(c *echo.Context) error {
-	token, err := echo.ContextGet[*jwt.Token](c, "user")
-	if err != nil {
-		return ErrUnauthorized
-	}
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return ErrUnauthorized
-	}
-	userIDStr, ok := claims["user_id"].(string)
-	if !ok {
-		return ErrBadRequest
-	}
-	userUUID, err := uuid.Parse(userIDStr)
+	userID := userIDFromCtx(c)
+
+	storageID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		return ErrBadRequest
 	}
-	fileName := c.Param("filename") // Получаем имя из URL: /api/v1/storage/delete/:filename
+	name := c.Param("name")
 
-	if fileName == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "filename is required")
+	if err := h.storageService.DeleteFile(c.Request().Context(), userID, storageID, name); err != nil {
+		return err
 	}
-
-	err = h.storageService.DeleteUserFile(c.Request().Context(), userUUID, fileName)
-	if err != nil {
-		// Если ошибка в S3, отдаем 500, или 404 если файл не найден
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete file: "+err.Error())
-	}
-
-	return c.JSON(http.StatusOK, map[string]string{
-		"status":  "success",
-		"message": "file deleted successfully",
-	})
+	return c.JSON(http.StatusOK, map[string]string{"status": "success"})
 }
 
 func (h *StorageHandler) ShareFile(c *echo.Context) error {
-	token, err := echo.ContextGet[*jwt.Token](c, "user")
-	if err != nil {
-		return ErrUnauthorized
-	}
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return ErrUnauthorized
-	}
-	userIDStr, ok := claims["user_id"].(string)
-	if !ok {
-		return ErrBadRequest
-	}
-	userUUID, err := uuid.Parse(userIDStr)
+	userID := userIDFromCtx(c)
+
+	storageID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		return ErrBadRequest
 	}
-	fileName := c.QueryParam("filename")
+	name := c.Param("name")
 
-	// Генерируем ссылку, которая будет жить 1 час
-	link, err := h.storageService.GetShareableLink(c.Request().Context(), userUUID, fileName, 1*time.Hour)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate link")
+	var req shareRequest
+	_ = c.Bind(&req)
+	ttl := time.Duration(req.TTLSeconds) * time.Second
+	if ttl <= 0 {
+		ttl = time.Hour
 	}
 
-	return c.JSON(http.StatusOK, map[string]string{
-		"url": link,
+	sh, err := h.storageService.ShareFile(c.Request().Context(), userID, storageID, name, ttl)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusCreated, map[string]any{
+		"token":      sh.Token,
+		"url":        h.publicBaseURL + "/api/v1/shared/" + sh.Token,
+		"expires_at": sh.ExpiresAt,
 	})
+}
+
+func (h *StorageHandler) DownloadShared(c *echo.Context) error {
+	token := c.Param("token")
+
+	stream, size, contentType, name, err := h.storageService.GetSharedFile(c.Request().Context(), token)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	return h.streamFile(c, stream, size, contentType, name)
+}
+
+func (h *StorageHandler) RevokeShare(c *echo.Context) error {
+	userID := userIDFromCtx(c)
+	token := c.Param("token")
+
+	if err := h.storageService.RevokeShare(c.Request().Context(), userID, token); err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, map[string]string{"status": "success"})
 }
 
 func (h *StorageHandler) CreateUploadLink(c *echo.Context) error {
-	token, err := echo.ContextGet[*jwt.Token](c, "user")
-	if err != nil {
-		return ErrUnauthorized
-	}
+	userID := userIDFromCtx(c)
 
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return ErrUnauthorized
-	}
-
-	userIDStr, ok := claims["user_id"].(string)
-	if !ok {
-		return ErrBadRequest
-	}
-
-	userUUID, err := uuid.Parse(userIDStr)
+	storageID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		return ErrBadRequest
 	}
+	name := c.Param("name")
 
-	link, err := h.storageService.CreateUploadLink(
-		c.Request().Context(),
-		userUUID,
-		"go-way.jpg",
-		24*time.Hour,
-	)
+	link, err := h.storageService.CreateUploadLink(c.Request().Context(), userID, storageID, name, 24*time.Hour)
 	if err != nil {
-		return echo.NewHTTPError(
-			http.StatusInternalServerError,
-			err.Error(),
-		)
+		return err
 	}
-
-	return c.JSON(http.StatusOK, map[string]string{
-		"upload_url": link,
-	})
+	return c.JSON(http.StatusOK, map[string]string{"upload_url": link})
 }
 
-func (h *StorageHandler) RegisterRoute(c *echo.Echo) {
-	api := c.Group("/api/v1/storage")
-	api.POST("/create", h.CreateStorage)
-	api.POST("/upload", h.UploadFile, middleware.BodyLimit(100<<20))
-	api.GET("/download", h.DownloadFile)
-	api.DELETE("/delete/:filename", h.DeleteFile)
-	api.GET("/share", h.ShareFile)
-	api.POST("/share-folder", h.CreateUploadLink)
+func (h *StorageHandler) GrantAccess(c *echo.Context) error {
+	userID := userIDFromCtx(c)
+
+	storageID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return ErrBadRequest
+	}
+
+	var req grantAccessRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+	if err := c.Validate(&req); err != nil {
+		return err
+	}
+	target, err := uuid.Parse(req.UserID)
+	if err != nil {
+		return ErrBadRequest
+	}
+
+	if err := h.storageService.GrantAccess(c.Request().Context(), userID, storageID, target, req.Level); err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, map[string]string{"status": "success"})
+}
+
+func (h *StorageHandler) ListAccess(c *echo.Context) error {
+	userID := userIDFromCtx(c)
+
+	storageID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return ErrBadRequest
+	}
+
+	list, err := h.storageService.ListAccess(c.Request().Context(), userID, storageID)
+	if err != nil {
+		return err
+	}
+	if list == nil {
+		list = []model.StorageAccess{}
+	}
+	return c.JSON(http.StatusOK, list)
+}
+
+func (h *StorageHandler) RevokeAccess(c *echo.Context) error {
+	userID := userIDFromCtx(c)
+
+	storageID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return ErrBadRequest
+	}
+	target, err := uuid.Parse(c.Param("userId"))
+	if err != nil {
+		return ErrBadRequest
+	}
+
+	if err := h.storageService.RevokeAccess(c.Request().Context(), userID, storageID, target); err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, map[string]string{"status": "success"})
+}
+
+func (h *StorageHandler) streamFile(c *echo.Context, stream io.Reader, size int64, contentType, name string) error {
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	if size > 0 {
+		c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", size))
+	}
+	return c.Stream(http.StatusOK, contentType, stream)
+}
+
+func (h *StorageHandler) authUser(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		token, err := echo.ContextGet[*jwt.Token](c, "user")
+		if err != nil {
+			return ErrUnauthorized
+		}
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			return ErrUnauthorized
+		}
+		idStr, ok := claims["user_id"].(string)
+		if !ok {
+			return ErrBadRequest
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return ErrBadRequest
+		}
+		c.Set("user_id", id)
+		return next(c)
+	}
+}
+
+func userIDFromCtx(c *echo.Context) uuid.UUID {
+	id, _ := c.Get("user_id").(uuid.UUID)
+	return id
+}
+
+func (h *StorageHandler) RegisterRoute(e *echo.Echo) {
+	e.GET("/api/v1/shared/:token", h.DownloadShared)
+
+	jwtMW := echojwt.WithConfig(echojwt.Config{
+		SigningKey: h.jwtSecret,
+	})
+	api := e.Group("/api/v1", jwtMW, h.authUser)
+
+	api.POST("/storages", h.CreateStorage)
+	api.GET("/storages", h.ListStorages)
+	api.GET("/storages/:id", h.GetStorage)
+	api.POST("/storages/:id/files", h.UploadFile, middleware.BodyLimit(100<<20))
+	api.GET("/storages/:id/files", h.ListFiles)
+	api.GET("/storages/:id/files/:name", h.DownloadFile)
+	api.DELETE("/storages/:id/files/:name", h.DeleteFile)
+	api.POST("/storages/:id/files/:name/share", h.ShareFile)
+	api.POST("/storages/:id/files/:name/upload-link", h.CreateUploadLink)
+	api.POST("/storages/:id/access", h.GrantAccess)
+	api.GET("/storages/:id/access", h.ListAccess)
+	api.DELETE("/storages/:id/access/:userId", h.RevokeAccess)
+	api.DELETE("/shares/:token", h.RevokeShare)
 }
 
 type RequestValidator struct {
 	Validator *validator.Validate
 }
 
-func (rv *RequestValidator) Validate(i interface{}) error {
+func (rv *RequestValidator) Validate(i any) error {
 	if err := rv.Validator.Struct(i); err != nil {
-		return ErrBadRequest
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	return nil
 }
@@ -282,16 +387,29 @@ func CustomHTTPErrorHandler(c *echo.Context, err error) {
 		return
 	}
 
+	code := http.StatusInternalServerError
 	switch {
+	case errors.Is(err, service.ErrNotFound):
+		code = http.StatusNotFound
+	case errors.Is(err, service.ErrAlreadyExists):
+		code = http.StatusConflict
+	case errors.Is(err, service.ErrForbidden):
+		code = http.StatusForbidden
+	case errors.Is(err, service.ErrQuotaExceeded), errors.Is(err, service.ErrFileTooLarge):
+		code = http.StatusRequestEntityTooLarge
+	case errors.Is(err, service.ErrMimeNotAllowed), errors.Is(err, service.ErrInvalidFileName):
+		code = http.StatusBadRequest
+	case errors.Is(err, service.ErrShareExpired):
+		code = http.StatusGone
 	case errors.Is(err, ErrBadRequest):
-		_ = c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	case errors.Is(err, ErrBadRequestEOF):
-		_ = c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
+		code = http.StatusBadRequest
 	case errors.Is(err, ErrUnauthorized):
-		_ = c.JSON(http.StatusUnauthorized, map[string]any{"error": err.Error()})
+		code = http.StatusUnauthorized
+	}
+
+	if code == http.StatusInternalServerError {
+		_ = c.JSON(code, map[string]any{"error": "internal server error"})
 		return
 	}
-	_ = c.JSON(http.StatusInternalServerError, map[string]any{"error": "internal server error"})
+	_ = c.JSON(code, map[string]any{"error": err.Error()})
 }
