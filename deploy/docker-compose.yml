@@ -41,8 +41,6 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
       API_KEY: ${PYDIO_API_KEY}
-      # Обязан совпадать с CELLS_EXTERNAL (оба берут CELLS_PUBLIC_URL),
-      # иначе S3-загрузка падает с 403 SignatureDoesNotMatch.
       PYDIO_BASE_URL: ${CELLS_PUBLIC_URL}
     depends_on:
       storage-postgres:
