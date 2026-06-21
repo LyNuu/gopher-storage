@@ -1,0 +1,7 @@
+.git
+.env
+*.md
+Dockerfile
+.dockerignore
+docker-compose.yml
+go-way.jpg

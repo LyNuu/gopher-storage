@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,6 +33,11 @@ func main() {
 	e := echo.New()
 	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: allowedOrigins(),
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAuthorization},
+	}))
 	e.Validator = &api.RequestValidator{Validator: validator.New()}
 	e.HTTPErrorHandler = api.CustomHTTPErrorHandler
 
@@ -71,4 +77,18 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("shutdown error", "error", err)
 	}
+}
+
+func allowedOrigins() []string {
+	raw := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS"))
+	if raw == "" {
+		return []string{"*"}
+	}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

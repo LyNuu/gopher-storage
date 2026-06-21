@@ -1,0 +1,125 @@
+name: gopher-storage
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - auth-service
+      - storage-service
+
+  auth-service:
+    image: ghcr.io/lynuu/auth-service:latest
+    build:
+      context: ../auth-service
+    restart: unless-stopped
+    environment:
+      CONNECTION_STRING: postgres://postgres:${AUTH_DB_PASSWORD}@auth-postgres:5432/auth_db?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      REDIS_ADDR: redis:6379
+    depends_on:
+      auth-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  storage-service:
+    image: ghcr.io/lynuu/storage-service:latest
+    build:
+      context: ../storage-service
+    restart: unless-stopped
+    environment:
+      CONNECTION_STRING: postgres://storage_user:${STORAGE_DB_PASSWORD}@storage-postgres:5432/storage_metadata?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      API_KEY: ${PYDIO_API_KEY}
+      PYDIO_BASE_URL: https://pydio-cells:8070
+    depends_on:
+      storage-postgres:
+        condition: service_healthy
+      pydio-cells:
+        condition: service_started
+
+  auth-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: auth_db
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD}
+    volumes:
+      - auth_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auth_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  storage-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: storage_user
+      POSTGRES_DB: storage_metadata
+      POSTGRES_PASSWORD: ${STORAGE_DB_PASSWORD}
+    volumes:
+      - storage_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U storage_user -d storage_metadata"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  cells-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cells
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${CELLS_DB_PASSWORD}
+    volumes:
+      - cells_pgdata:/var/lib/postgresql/data
+
+  pydio-cells:
+    image: pydio/cells:latest
+    restart: unless-stopped
+    # Порт 8070 открыт для первичной настройки Cells (мастер, воркспейс, API-ключ).
+    # После настройки можно закрыть фаерволом.
+    ports:
+      - "8070:8070"
+    environment:
+      - CELLS_BIND=0.0.0.0:8070
+      - CELLS_EXTERNAL=https://138.16.175.157.sslip.io:8070
+    volumes:
+      - cells_data:/var/cells
+    depends_on:
+      - cells-db
+
+volumes:
+  caddy_data:
+  caddy_config:
+  auth_pgdata:
+  storage_pgdata:
+  redisdata:
+  cells_pgdata:
+  cells_data:

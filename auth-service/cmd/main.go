@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,13 +36,18 @@ func main() {
 	e := echo.New()
 	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: allowedOrigins(),
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAuthorization},
+	}))
 	e.Validator = &api.RequestValidator{Validator: validator.New()}
 	e.HTTPErrorHandler = api.CustomHTTPErrorHandler
 	pool := connections.InitPool(ctx)
 	defer pool.Close()
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
+		Addr:     getEnv("REDIS_ADDR", "localhost:6379"),
 		Password: "",
 		DB:       0,
 	})
@@ -74,4 +80,25 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("shutdown error", "error", err)
 	}
+}
+
+func allowedOrigins() []string {
+	raw := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS"))
+	if raw == "" {
+		return []string{"*"}
+	}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func getEnv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

@@ -1,0 +1,11 @@
+138.16.175.157.sslip.io {
+	handle /api/v1/auth/* {
+		reverse_proxy auth-service:8080
+	}
+
+	handle /api/v1/* {
+		reverse_proxy storage-service:8082
+	}
+
+	respond "gopher-storage backend ok" 200
+}
