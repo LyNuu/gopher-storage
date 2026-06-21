@@ -1,6 +1,4 @@
 -- +goose Up
--- +goose StatementBegin
--- +goose StatementEnd
 create type user_role as enum ('user', 'admin');
 
 create table users
