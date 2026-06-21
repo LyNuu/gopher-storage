@@ -44,7 +44,7 @@ func (r *StorageRepository) GetByID(ctx context.Context, userID uuid.UUID) (mode
 
 func (r *StorageRepository) Create(ctx context.Context, storage model.UserDataDB) error {
 	query := `
-		INSERT INTO user_storage (id, max_size_bytes, used_bytes, created_at, updated_at) 
+		INSERT INTO user_storage (id, max_size_bytes, used_bytes) 
 		VALUES ($1, $2, $3)
 	`
 

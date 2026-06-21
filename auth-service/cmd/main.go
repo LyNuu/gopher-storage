@@ -52,7 +52,7 @@ func main() {
 
 	authRepository := repository.NewAuthRepository(pool)
 	authService := service.NewAuthService(authRepository, authCache,
-		[]byte(os.Getenv("JWT_SECRET")), 1*time.Minute, 3*time.Minute)
+		[]byte(os.Getenv("JWT_SECRET")), 24*60*time.Minute, 2*24*60*time.Minute)
 
 	authHandler := api.NewAuthHandler(authService)
 	authHandler.RegisterRoute(e)

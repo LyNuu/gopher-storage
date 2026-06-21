@@ -42,7 +42,11 @@ func main() {
 	pool := connections.InitPool(ctx)
 	defer pool.Close()
 
-	pydioClient := pydio.NewPydioStorage("", os.Getenv("API_KEY"))
+	pydioClient := pydio.NewPydioStorage(
+		os.Getenv("PYDIO_BASE_URL"),
+		os.Getenv("API_KEY"),
+		"gatewaysecret", // фиксированная константа протокола Pydio S3-gateway, не секрет в смысле безопасности
+	)
 	storageRepository := repository.NewStorageRepository(pool)
 	storageService := service.NewStorageService(storageRepository, pydioClient)
 
