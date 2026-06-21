@@ -84,7 +84,9 @@ func (r *StorageRepository) UpsertFileWithQuota(ctx context.Context, f model.Fil
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	var maxSize, usedBytes int64
 	err = tx.QueryRow(ctx, `select max_size_bytes, used_bytes from storages where id = $1 for update`, f.StorageID).
@@ -190,7 +192,9 @@ func (r *StorageRepository) DeleteFile(ctx context.Context, storageID uuid.UUID,
 	if err != nil {
 		return model.File{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	var f model.File
 	err = tx.QueryRow(ctx, `

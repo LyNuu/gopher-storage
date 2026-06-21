@@ -22,3 +22,7 @@ miniodata/
 *.njsproj
 *.sln
 *.swp
+
+install.ps1
+
+.claude
