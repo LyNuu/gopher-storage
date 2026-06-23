@@ -15,7 +15,7 @@ import (
 	"storage-service/internal/repository"
 )
 
-const defaultMaxStorageSize = int64(1 * 1024 * 1024 * 1024)
+const defaultMaxStorageSize = int64(1 * 1024000 * 1024000 * 1024000)
 
 type StorageService struct {
 	repo  storageRepository
