@@ -351,7 +351,7 @@ func (h *StorageHandler) RegisterRoute(e *echo.Echo) {
 	api.POST("/storages", h.CreateStorage)
 	api.GET("/storages", h.ListStorages)
 	api.GET("/storages/:id", h.GetStorage)
-	api.POST("/storages/:id/files", h.UploadFile, middleware.BodyLimit(100<<20))
+	api.POST("/storages/:id/files", h.UploadFile, middleware.BodyLimit(5<<30))
 	api.GET("/storages/:id/files", h.ListFiles)
 	api.GET("/storages/:id/files/:name", h.DownloadFile)
 	api.DELETE("/storages/:id/files/:name", h.DeleteFile)
